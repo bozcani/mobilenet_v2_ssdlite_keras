@@ -36,35 +36,7 @@ def predict_block(inputs, out_channel, sym, id):
     return x
 
 
-def mobilenet_v2_ssd(image_size,
-            n_classes,
-            mode='training',
-            l2_regularization=0.0005,
-            min_scale=None,
-            max_scale=None,
-            scales=None,
-            aspect_ratios_global=None,
-            aspect_ratios_per_layer=[[1.0, 2.0, 0.5],
-                                     [1.0, 2.0, 0.5, 3.0, 1.0 / 3.0],
-                                     [1.0, 2.0, 0.5, 3.0, 1.0 / 3.0],
-                                     [1.0, 2.0, 0.5, 3.0, 1.0 / 3.0],
-                                     [1.0, 2.0, 0.5],
-                                     [1.0, 2.0, 0.5]],
-            two_boxes_for_ar1=True,
-            steps=[8, 16, 32, 64, 100, 300],
-            offsets=None,
-            clip_boxes=False,
-            variances=[0.1, 0.1, 0.2, 0.2],
-            coords='centroids',
-            normalize_coords=True,
-            subtract_mean=[123, 117, 104],
-            divide_by_stddev=None,
-            swap_channels=[2, 1, 0],
-            confidence_thresh=0.01,
-            iou_threshold=0.45,
-            top_k=200,
-            nms_max_output_size=400,
-            return_predictor_sizes=False):
+def mobilenet_v2_ssd(config, mode='training'):
     """
     Build a Keras model with SSD300 architecture, see references.
     The base network is a reduced atrous VGG-16, extended by the SSD architecture,
@@ -78,7 +50,7 @@ def mobilenet_v2_ssd(image_size,
     `SSDBoxEncoder` class.
     Note: Requires Keras v2.0 or later. Currently works only with the
     TensorFlow backend (v1.0 or later).
-    Arguments:
+    Arguments (loaded from the config file):
         image_size (tuple): The input image size in the format `(height, width, channels)`.
         n_classes (int): The number of positive classes, e.g. 20 for Pascal VOC, 80 for MS COCO.
         mode (str, optional): One of 'training', 'inference' and 'inference_fast'. In 'training' mode,
@@ -177,26 +149,27 @@ def mobilenet_v2_ssd(image_size,
     """
 
     n_predictor_layers = 6  # The number of predictor conv layers in the network is 6 for the original SSD300.
-    n_classes += 1  # Account for the background class.
-    l2_reg = l2_regularization  # Make the internal name shorter.
-    img_height, img_width, img_channels = image_size[0], image_size[1], image_size[2]
+    n_classes = config['n_classes'] + 1  # Account for the background class.
+    l2_reg = config['l2_regularization']  # Make the internal name shorter.
+    img_height, img_width, img_channels = config['input_res'][0], config['input_res'][1], config['input_res'][2]
 
     ############################################################################
     # Get a few exceptions out of the way.
     ############################################################################
 
-    if aspect_ratios_global is None and aspect_ratios_per_layer is None:
+    if config['aspect_ratios_global'] is None and config['aspect_ratios_per_layer'] is None:
         raise ValueError(
             "`aspect_ratios_global` and `aspect_ratios_per_layer` \
             cannot both be None. At least one needs to be specified.")
-    if aspect_ratios_per_layer:
-        if len(aspect_ratios_per_layer) != n_predictor_layers:
+    if config['aspect_ratios_per_layer']:
+        if len(config['aspect_ratios_per_layer']) != n_predictor_layers:
             raise ValueError(
                 "It must be either aspect_ratios_per_layer is None or len(aspect_ratios_per_layer) == {}, \
                 but len(aspect_ratios_per_layer) == {}.".format(
-                    n_predictor_layers, len(aspect_ratios_per_layer)))
+                    n_predictor_layers, len(config['aspect_ratios_per_layer'])))
 
-    if (min_scale is None or max_scale is None) and scales is None:
+    scales = config['scales']
+    if (config['min_scale'] is None or config['max_scale'] is None) and scales is None:
         raise ValueError("Either `min_scale` and `max_scale` or `scales` need to be specified.")
     if scales:
         if len(scales) != n_predictor_layers + 1:
@@ -205,18 +178,19 @@ def mobilenet_v2_ssd(image_size,
     # If no explicit list of scaling factors was passed,
     # compute the list of scaling factors from `min_scale` and `max_scale`
     else:
-        scales = np.linspace(min_scale, max_scale, n_predictor_layers + 1)
+        scales = np.linspace(config['min_scale'], config['max_scale'], n_predictor_layers + 1)
 
+    variances = config['variances']
     if len(variances) != 4:
         raise ValueError("4 variance values must be pased, but {} values were received.".format(len(variances)))
     variances = np.array(variances)
     if np.any(variances <= 0):
         raise ValueError("All variances must be >0, but the variances given are {}".format(variances))
 
-    if (not (steps is None)) and (len(steps) != n_predictor_layers):
+    if (not (config['steps'] is None)) and (len(config['steps']) != n_predictor_layers):
         raise ValueError("You must provide at least one step value per predictor layer.")
 
-    if (not (offsets is None)) and (len(offsets) != n_predictor_layers):
+    if (not (config['offsets'] is None)) and (len(config['offsets']) != n_predictor_layers):
         raise ValueError("You must provide at least one offset value per predictor layer.")
 
     ############################################################################
@@ -224,29 +198,31 @@ def mobilenet_v2_ssd(image_size,
     ############################################################################
 
     # Set the aspect ratios for each predictor layer. These are only needed for the anchor box layers.
-    if aspect_ratios_per_layer:
-        aspect_ratios = aspect_ratios_per_layer
+    if config['aspect_ratios_per_layer']:
+        aspect_ratios = config['aspect_ratios_per_layer']
     else:
-        aspect_ratios = [aspect_ratios_global] * n_predictor_layers
+        aspect_ratios = [config['aspect_ratios_global']] * n_predictor_layers
 
     # Compute the number of boxes to be predicted per cell for each predictor layer.
     # We need this so that we know how many channels the predictor layers need to have.
-    if aspect_ratios_per_layer:
+    if config['aspect_ratios_per_layer']:
         n_boxes = []
-        for ar in aspect_ratios_per_layer:
-            if (1 in ar) & two_boxes_for_ar1:
+        for ar in config['aspect_ratios_per_layer']:
+            if (1 in ar) & config['two_boxes_for_ar1']:
                 n_boxes.append(len(ar) + 1)  # +1 for the second box for aspect ratio 1
             else:
                 n_boxes.append(len(ar))
     # If only a global aspect ratio list was passed,
     # then the number of boxes is the same for each predictor layer
     else:
-        if (1 in aspect_ratios_global) & two_boxes_for_ar1:
-            n_boxes = len(aspect_ratios_global) + 1
+        if (1 in config['aspect_ratios_global']) & config['two_boxes_for_ar1']:
+            n_boxes = len(config['aspect_ratios_global']) + 1
         else:
-            n_boxes = len(aspect_ratios_global)
+            n_boxes = len(config['aspect_ratios_global'])
         n_boxes = [n_boxes] * n_predictor_layers
 
+    steps = config['steps']
+    offsets = config['offsets']
     if steps is None:
         steps = [None] * n_predictor_layers
     if offsets is None:
@@ -260,18 +236,22 @@ def mobilenet_v2_ssd(image_size,
         return tensor
 
     def input_mean_normalization(tensor):
-        return tensor - np.array(subtract_mean)
+        return tensor - np.array(config['subtract_mean'])
 
     def input_stddev_normalization(tensor):
-        return tensor / np.array(divide_by_stddev)
+        return tensor / np.array(config['divide_by_stddev'])
 
     def input_channel_swap(tensor):
-        if len(swap_channels) == 3:
+        if len(config['swap_channels']) == 3:
             return K.stack(
-                [tensor[..., swap_channels[0]], tensor[..., swap_channels[1]], tensor[..., swap_channels[2]]], axis=-1)
-        elif len(swap_channels) == 4:
-            return K.stack([tensor[..., swap_channels[0]], tensor[..., swap_channels[1]], tensor[..., swap_channels[2]],
-                            tensor[..., swap_channels[3]]], axis=-1)
+                [tensor[..., config['swap_channels'][0]],
+                 tensor[..., config['swap_channels'][1]],
+                 tensor[..., config['swap_channels'][2]]], axis=-1)
+        elif len(config['swap_channels']) == 4:
+            return K.stack([tensor[..., config['swap_channels'][0]],
+                            tensor[..., config['swap_channels'][1]],
+                            tensor[..., config['swap_channels'][2]],
+                            tensor[..., config['swap_channels'][3]]], axis=-1)
 
     ############################################################################
     # Build the network.
@@ -284,13 +264,13 @@ def mobilenet_v2_ssd(image_size,
 
     tmp_shape = K.int_shape(x1)
 
-    if not (subtract_mean is None):
+    if not (config['subtract_mean'] is None):
         x1 = Lambda(input_mean_normalization, output_shape=(img_height, img_width, img_channels),
                     name='input_mean_normalization')(x1)
-    if not (divide_by_stddev is None):
+    if not (config['divide_by_stddev'] is None):
         x1 = Lambda(input_stddev_normalization, output_shape=(img_height, img_width, img_channels),
                     name='input_stddev_normalization')(x1)
-    if swap_channels:
+    if config['swap_channels']:
         x1 = Lambda(
             input_channel_swap, output_shape=(img_height, img_width, img_channels), name='input_channel_swap')(x1)
 
@@ -310,42 +290,60 @@ def mobilenet_v2_ssd(image_size,
     link5_box = predict_block(links[4], n_boxes[4] * 4, 'box', 5)
     link6_box = predict_block(links[5], n_boxes[5] * 4, 'box', 6)
 
-    priorbox1 = AnchorBoxes(img_height, img_width, this_scale=scales[0], next_scale=scales[1],
-                                             aspect_ratios=aspect_ratios[0],
-                                             two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[0],
-                                             this_offsets=offsets[0], clip_boxes=clip_boxes,
-                                             variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                             name='ssd_priorbox_1')(link1_box)
-    priorbox2 = AnchorBoxes(img_height, img_width, this_scale=scales[1], next_scale=scales[2],
-                                    aspect_ratios=aspect_ratios[1],
-                                    two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[1], this_offsets=offsets[1],
-                                    clip_boxes=clip_boxes,
-                                    variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                    name='ssd_priorbox_2')(link2_box)
-    priorbox3 = AnchorBoxes(img_height, img_width, this_scale=scales[2], next_scale=scales[3],
-                                        aspect_ratios=aspect_ratios[2],
-                                        two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[2],
-                                        this_offsets=offsets[2], clip_boxes=clip_boxes,
-                                        variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                        name='ssd_priorbox_3')(link3_box)
-    priorbox4 = AnchorBoxes(img_height, img_width, this_scale=scales[3], next_scale=scales[4],
-                                        aspect_ratios=aspect_ratios[3],
-                                        two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[3],
-                                        this_offsets=offsets[3], clip_boxes=clip_boxes,
-                                        variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                        name='ssd_priorbox_4')(link4_box)
-    priorbox5 = AnchorBoxes(img_height, img_width, this_scale=scales[4], next_scale=scales[5],
-                                        aspect_ratios=aspect_ratios[4],
-                                        two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[4],
-                                        this_offsets=offsets[4], clip_boxes=clip_boxes,
-                                        variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                        name='ssd_priorbox_5')(link5_box)
-    priorbox6 = AnchorBoxes(img_height, img_width, this_scale=scales[5], next_scale=scales[6],
-                                        aspect_ratios=aspect_ratios[5],
-                                        two_boxes_for_ar1=two_boxes_for_ar1, this_steps=steps[5],
-                                        this_offsets=offsets[5], clip_boxes=clip_boxes,
-                                        variances=variances, coords=coords, normalize_coords=normalize_coords,
-                                        name='ssd_priorbox_6')(link6_box)
+    priorbox1 = AnchorBoxes(img_height, img_width, this_scale=scales[0],
+                            next_scale=scales[1],
+                            aspect_ratios=aspect_ratios[0],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[0], this_offsets=offsets[0],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_1')(link1_box)
+    priorbox2 = AnchorBoxes(img_height, img_width, this_scale=scales[1],
+                            next_scale=scales[2],
+                            aspect_ratios=aspect_ratios[1],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[1], this_offsets=offsets[1],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_2')(link2_box)
+    priorbox3 = AnchorBoxes(img_height, img_width, this_scale=scales[2],
+                            next_scale=scales[3],
+                            aspect_ratios=aspect_ratios[2],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[2], this_offsets=offsets[2],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_3')(link3_box)
+    priorbox4 = AnchorBoxes(img_height, img_width, this_scale=scales[3],
+                            next_scale=scales[4],
+                            aspect_ratios=aspect_ratios[3],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[3], this_offsets=offsets[3],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_4')(link4_box)
+    priorbox5 = AnchorBoxes(img_height, img_width, this_scale=scales[4],
+                            next_scale=scales[5],
+                            aspect_ratios=aspect_ratios[4],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[4], this_offsets=offsets[4],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_5')(link5_box)
+    priorbox6 = AnchorBoxes(img_height, img_width, this_scale=scales[5],
+                            next_scale=scales[6],
+                            aspect_ratios=aspect_ratios[5],
+                            two_boxes_for_ar1=config['two_boxes_for_ar1'],
+                            this_steps=steps[5], this_offsets=offsets[5],
+                            clip_boxes=config['clip_boxes'],
+                            variances=variances, coords=config['coords'],
+                            normalize_coords=config['normalize_coords'],
+                            name='ssd_priorbox_6')(link6_box)
 
     # Reshape
     cls1_reshape = Reshape((-1, n_classes), name='ssd_cls1_reshape')(link1_cls)
@@ -386,32 +384,30 @@ def mobilenet_v2_ssd(image_size,
     if mode == 'training':
         model = Model(inputs=x, outputs=predictions)
     elif mode == 'inference':
-        decoded_predictions = DecodeDetections(confidence_thresh=confidence_thresh,
-                                               iou_threshold=iou_threshold,
-                                               top_k=top_k,
-                                               nms_max_output_size=nms_max_output_size,
-                                               coords=coords,
-                                               normalize_coords=normalize_coords,
-                                               img_height=img_height,
-                                               img_width=img_width,
+        decoded_predictions = DecodeDetections(confidence_thresh=config['confidence_thresh'],
+                                               iou_threshold=config['iou_threshold'],
+                                               top_k=config['top_k'],
+                                               nms_max_output_size=config['nms_max_output_size'],
+                                               coords=config['coords'],
+                                               normalize_coords=config['normalize_coords'],
+                                               img_height=img_height, img_width=img_width,
                                                name='ssd_decoded_predictions')(predictions)
         model = Model(inputs=x, outputs=decoded_predictions)
     elif mode == 'inference_fast':
-        decoded_predictions = DecodeDetectionsFast(confidence_thresh=confidence_thresh,
-                                                   iou_threshold=iou_threshold,
-                                                   top_k=top_k,
-                                                   nms_max_output_size=nms_max_output_size,
-                                                   coords=coords,
-                                                   normalize_coords=normalize_coords,
-                                                   img_height=img_height,
-                                                   img_width=img_width,
+        decoded_predictions = DecodeDetectionsFast(confidence_thresh=config['confidence_thresh'],
+                                                   iou_threshold=config['iou_threshold'],
+                                                   top_k=config['top_k'],
+                                                   nms_max_output_size=config['nms_max_output_size'],
+                                                   coords=config['coords'],
+                                                   normalize_coords=config['normalize_coords'],
+                                                   img_height=img_height, img_width=img_width,
                                                    name='ssd_decoded_predictions')(predictions)
         model = Model(inputs=x, outputs=decoded_predictions)
     else:
         raise ValueError(
             "`mode` must be one of 'training', 'inference' or 'inference_fast', but received '{}'.".format(mode))
 
-    if return_predictor_sizes:
+    if config['return_predictor_sizes']:
         predictor_sizes = np.array(
             [cls[0]._keras_shape[1:3], cls[1]._keras_shape[1:3], cls[2]._keras_shape[1:3],
              cls[3]._keras_shape[1:3], cls[4]._keras_shape[1:3], cls[5]._keras_shape[1:3]])
