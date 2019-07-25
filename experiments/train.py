@@ -20,10 +20,16 @@ from keras.callbacks import TensorBoard, ModelCheckpoint, LearningRateScheduler
 
 class Trainer:
     def __init__(self, args):
-        self.train_dir = args.train_dir
-        self.val_dir = args.val_dir
-        self.train_annotations = args.train_annotations
-        self.val_annotations = args.val_annotations
+        if args.train_datasets_root_dir:
+            self.train_datasets_root_dir = args.train_datasets_root_dir
+        else:
+            self.train_dir = args.train_dir
+            self.train_annotations = args.train_annotations
+        if args.val_datasets_root_dir:
+            self.val_datasets_root_dir = args.val_datasets_root_dir
+        else:
+            self.val_dir = args.val_dir
+            self.val_annotations = args.val_annotations
         self.log_dir = args.log_dir
         self.weights_path = args.weights_path
         with open(args.training_config, 'r') as config_file:
@@ -93,10 +99,8 @@ class Trainer:
         train_dataset = DataGenerator(load_images_into_memory=False, hdf5_dataset_path=None)
         val_dataset = DataGenerator(load_images_into_memory=False, hdf5_dataset_path=None)
 
-        train_dataset.parse_json(images_dirs=[self.train_dir], annotations_filenames=[self.train_annotations],
-                                 ground_truth_available=True, include_classes='all', ret=False)
-        val_dataset.parse_json(images_dirs=[self.val_dir], annotations_filenames=[self.val_annotations],
-                               ground_truth_available=True, include_classes='all', ret=False)
+        train_dataset.parse_custom_json(self.train_datasets_root_dir)
+        val_dataset.parse_custom_json(self.val_datasets_root_dir)
 
         # We need the `classes_to_cats` dictionary. Read the documentation of this function to understand why.
         cats_to_classes, classes_to_cats, cats_to_names, classes_to_names = get_coco_category_maps(train_annotations_filename)
@@ -180,13 +184,19 @@ if __name__ == "__main__":
     K.clear_session()
     parser = argparse.ArgumentParser(
         description='Training script for MobileNetV2 + SSDLite')
-    parser.add_argument('train_dir', type=str, help='''the path to the directory
+    parser.add_argument('--train-datasets-root-dir', type=str, help='''path to
+                        the root directory of all the training datasets to be
+                        parsed ''')
+    parser.add_argument('--val-datasets-root-dir', type=str, help='''path to
+                        the root directory of all the validation datasets to be
+                        parsed ''')
+    parser.add_argument('--train-dir', type=str, help='''the path to the directory
                         of training images''')
-    parser.add_argument('train_annotations', type=str, help='''the path to the
+    parser.add_argument('--train-annotations', type=str, help='''the path to the
                         annotations file of training images''')
-    parser.add_argument('val_dir', type=str, help='''the path to the directory
+    parser.add_argument('--val-dir', type=str, help='''the path to the directory
                         of validation images''')
-    parser.add_argument('val_annotations', type=str, help='''the path to the
+    parser.add_argument('--val-annotations', type=str, help='''the path to the
                         annotations file of validation images''')
     parser.add_argument('--log-dir', type=str, default='logs', help='''the path
                         to the log directory (will be created if it does not

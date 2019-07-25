@@ -13,18 +13,20 @@ limitations under the License.
 """
 
 from __future__ import division
-import numpy as np
-import inspect
-from collections import defaultdict
-import warnings
-import sklearn.utils
-from copy import deepcopy
-from PIL import Image
+
 import cv2
 import csv
 import os
 import sys
+import inspect
+import warnings
+import numpy as np
+import sklearn.utils
+
+from PIL import Image
+from copy import deepcopy
 from tqdm import tqdm, trange
+from collections import defaultdict
 
 try:
     import h5py
@@ -46,6 +48,7 @@ except ImportError:
 
 from utils.ssd_input_encoder import SSDInputEncoder
 from utils.object_detection_2d_image_boxes_validation import BoxFilter
+
 
 
 class DegenerateBatchError(Exception):
@@ -279,14 +282,8 @@ class DataGenerator:
             for i in tr:
                 self.eval_neutral.append(eval_neutral[i])
 
-    def parse_csv(self,
-                  images_dir,
-                  labels_filename,
-                  input_format,
-                  include_classes='all',
-                  random_sample=False,
-                  ret=False,
-                  verbose=True):
+    def parse_csv(self, images_dir, labels_filename, input_format,
+                  include_classes='all', random_sample=False, ret=False, verbose=True):
         """
         Arguments:
             images_dir (str): The path to the directory that contains the images.
@@ -570,6 +567,98 @@ class DataGenerator:
 
         if ret:
             return self.images, self.filenames, self.labels, self.image_ids, self.eval_neutral
+
+    def parse_custom_json(self, datasets_dir, ground_truth_available=False,
+                          include_classes='all',
+                          ret=False, verbose=True):
+
+        '''
+            Parses a custom json structure for annotations, and such for all
+            dataset directories in the root directory given:
+
+                datasets_root/
+                    dataset1/
+                        images/
+                            001.jpg
+                            ...
+                        annotations.json
+                    ...
+
+        '''
+        self.images_dir = []
+        self.annotations_filenames = []
+
+        for root, subdirs, files in os.walk(datasets_dir):
+            if 'images' in subdirs and 'annotations.json' in files:
+                self.images_dir.append(os.path.join(datasets_dir, root, 'images'))
+                self.annotations_filenames.append(os.path.join(datasets_dir, root, 'annotations.json'))
+
+        self.include_classes = include_classes
+        self.filenames = []
+        self.image_ids = []
+        self.labels = []
+        if not ground_truth_available:
+            self.labels = None
+
+        with open(self.annotations_filenames[0], 'r') as f:
+            annotations = json.load(f)
+
+        self.classes_to_labels = annotations['classes']
+
+        for images_dir, annotations_filename in zip(self.images_dir, self.annotations_filenames):
+            with open(annotations_filename) as f:
+                annotations = json.load(f)
+                
+            if verbose:
+                it = tqdm(annotations['annotations'],
+                          desc="Processing '{}/{}'".format(os.path.basename(os.path.dirname(annotations_filename)),
+                                                           os.path.basename(annotations_filename)))
+            else:
+                it = annotations['annotations']
+
+            i = 0
+            for img_annotations in it:
+                img = img_annotations['image']
+                annotations = img_annotations['annotations']
+                self.filenames.append(os.path.join(images_dir, img))
+                self.image_ids.append(i)
+
+                if ground_truth_available:
+                    boxes = []
+                    for annotation in annotations:
+                        class_id = annotation['class_id']
+                        if (not self.include_classes == 'all') and not (class_id in self.include_classes):
+                            continue
+                        item_dict = {
+                            'image_name': img,
+                            'image_id': i,
+                            'class_id': class_id,
+                            'xmin': annotation['xmin'],
+                            'ymin': annotation['ymin'],
+                            'xmax': annotation['xmax'],
+                            'ymax': annotation['ymax']
+                        }
+                        box = []
+                        for item in self.labels_output_format:
+                            box.append(item_dict[item])
+                        boxes.append(box)
+                    self.labels.append(boxes)
+
+        self.dataset_size = len(self.filenames)
+        self.dataset_indices = np.arange(self.dataset_size, dtype=np.int32)
+        if self.load_images_into_memory:
+            self.images = []
+            if verbose:
+                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+            else:
+                it = self.filenames
+            for filename in it:
+                with Image.open(filename) as image:
+                    self.images.append(np.array(image, dtype=np.uint8))
+
+        if ret:
+            return self.images, self.filenames, self.labels, self.image_ids
+
 
     def parse_json(self,
                    images_dirs,
