@@ -608,7 +608,6 @@ class DataGenerator:
         for images_dir, annotations_filename in zip(self.images_dir, self.annotations_filenames):
             with open(annotations_filename) as f:
                 annotations = json.load(f)
-                
             if verbose:
                 it = tqdm(annotations['annotations'],
                           desc="Processing '{}/{}'".format(os.path.basename(os.path.dirname(annotations_filename)),
