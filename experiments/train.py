@@ -3,8 +3,11 @@
 import os
 import re
 import yaml
+import h5py
 import argparse
+import numpy as np
 
+from tqdm import tqdm
 from keras import backend as K
 from keras.optimizers import Adam
 from losses.keras_ssd_loss import SSDLoss
@@ -69,7 +72,7 @@ class Trainer:
             if not layer.weights:
                 continue
             # Is it trainable?
-            trainable = bool(re.fullmatch(layer_regex, layer.name))
+            trainable = bool(re.fullmatch(layer_regex, layer.nameTrue))
             # Update layer. If layer is a container, update inner layer.
             if layer.__class__.__name__ == 'TimeDistributed':
                 layer.layer.trainable = trainable
@@ -80,12 +83,31 @@ class Trainer:
                 print("{}{:20}   ({})".format(" " * indent, layer.name, layer.__class__.__name__))
 
 
+    def transfer_weights(self, model):
+        print("Transfering weights from {}".format(self.weights_path))
+        f = h5py.File(self.weights_path)
+        model_layers = [layer.name for layer in model.layers]
+        layer_dict = dict([(layer.name, layer) for layer in model.layers])
+        for i in tqdm(layer_dict.keys(), bar_format='{l_bar}{bar}'):
+            if i in f:
+                weight_names = f[i].attrs["weight_names"]
+                weights = [f[i][j] for j in weight_names]
+                index = model_layers.index(i)
+                try:
+                    model.layers[index].set_weights(weights)
+                except Exception as e:
+                    print(e)
+        return model
+
     def train(self):
         # build model
         model = mobilenet_v2_ssd(self.training_config)
+        print(model.summary())
 
         # load weights
-        model.load_weights(self.weights_path, by_name=True)
+        if self.weights_path:
+            model = self.transfer_weights(model)
+            # model.load_weights(self.weights_path, by_name=True)
 
         # compile the model
         adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
@@ -93,7 +115,6 @@ class Trainer:
         # set_trainable(r"(ssd\_[cls|box].*)", model)
         model.compile(optimizer=adam, loss=ssd_loss.compute_loss)
 
-        print(model.summary())
 
         # load data
         train_dataset = DataGenerator(load_images_into_memory=False, hdf5_dataset_path=None)
@@ -107,15 +128,14 @@ class Trainer:
         # set the image transformations for pre-processing and data augmentation options.
         # For the training generator:
         ssd_data_augmentation = SSDDataAugmentation(img_height=self.training_config['input_res'][0],
-                                                    img_width=self.training_config['input_res'][1],
-                                                    background=self.training_config['subtract_mean'])
+                                                    img_width=self.training_config['input_res'][1])
 
         # For the validation generator:
         convert_to_3_channels = ConvertTo3Channels()
-        resize = Resize(height=self.training_config['input_res'][0], width=self.training_config['input_res'][1])
+        resize = Resize(height=self.training_config['input_res'][0],
+                        width=self.training_config['input_res'][1])
 
         # instantiate an encoder that can encode ground truth labels into the format needed by the SSD loss function.
-
         # The encoder constructor needs the spatial dimensions of the model's predictor layers to create the anchor boxes.
         predictor_sizes = [model.get_layer('ssd_cls1conv2_bn').output_shape[1:3],
                            model.get_layer('ssd_cls2conv2_bn').output_shape[1:3],
@@ -138,7 +158,9 @@ class Trainer:
                                             matching_type='multi',
                                             pos_iou_threshold=0.5,
                                             neg_iou_limit=0.3,
-                                            normalize_coords=self.training_config['normalize_coords'])
+                                            coords=self.training_config['coords'],
+                                            normalize_coords=self.training_config['normalize_coords'],
+                                            background_id=self.training_config['background_class_id'])
 
         # create the generator handles that will be passed to Keras' `fit_generator()` function.
 
@@ -159,12 +181,16 @@ class Trainer:
                                                       'encoded_labels'},
                                              keep_images_without_gt=False)
 
+
         # Get the number of samples in the training and validations datasets.
         train_dataset_size = train_dataset.get_dataset_size()
         val_dataset_size = val_dataset.get_dataset_size()
 
         print("Number of images in the training dataset:\t{:>6}".format(train_dataset_size))
         print("Number of images in the validation dataset:\t{:>6}".format(val_dataset_size))
+
+        steps_per_epoch = int(np.ceil(train_dataset_size/self.training_config['batch_size']))
+        validation_steps = int(np.ceil(val_dataset_size/self.training_config['batch_size']))
 
         callbacks = [LearningRateScheduler(schedule=self.lr_schedule, verbose=1),
                      TensorBoard(log_dir=self.log_dir, histogram_freq=0, write_graph=True, write_images=False),
@@ -173,9 +199,11 @@ class Trainer:
                                       "ssdseg_hybrid_dataset_{epoch:02d}_loss-{loss:.4f}_val_loss-{val_loss:.4f}.h5"),
                          monitor='val_loss', verbose=1, save_best_only=True, save_weights_only=True)]
 
-        model.fit_generator(train_generator, epochs=1000, steps_per_epoch=1000,
+        model.fit_generator(train_generator,
+                            epochs=self.training_config['epochs'],
+                            steps_per_epoch=steps_per_epoch,
                             callbacks=callbacks, validation_data=val_generator,
-                            validation_steps=100, initial_epoch=0)
+                            validation_steps=validation_steps, initial_epoch=0)
 
 
 
@@ -205,7 +233,7 @@ if __name__ == "__main__":
                         default='training_config.yaml', help='''the path to the
                         YAML configuration file for the training session''')
     parser.add_argument('--weights-path', type=str, help='''the path to the
-                        weights file for transfer learning''', required=True)
+                        weights file for transfer learning''', required=False)
     args = parser.parse_args()
     trainer = Trainer(args)
     trainer.train()

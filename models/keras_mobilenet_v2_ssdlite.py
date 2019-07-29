@@ -388,7 +388,7 @@ def mobilenet_v2_ssd(config, mode='training'):
                                                iou_threshold=config['iou_threshold'],
                                                top_k=config['top_k'],
                                                nms_max_output_size=config['nms_max_output_size'],
-                                               coords=config['coords'],
+                                               coords=config['inference_coords'],
                                                normalize_coords=config['normalize_coords'],
                                                img_height=img_height, img_width=img_width,
                                                name='ssd_decoded_predictions')(predictions)
@@ -398,7 +398,7 @@ def mobilenet_v2_ssd(config, mode='training'):
                                                    iou_threshold=config['iou_threshold'],
                                                    top_k=config['top_k'],
                                                    nms_max_output_size=config['nms_max_output_size'],
-                                                   coords=config['coords'],
+                                                   coords=config['inference_coords'],
                                                    normalize_coords=config['normalize_coords'],
                                                    img_height=img_height, img_width=img_width,
                                                    name='ssd_decoded_predictions')(predictions)

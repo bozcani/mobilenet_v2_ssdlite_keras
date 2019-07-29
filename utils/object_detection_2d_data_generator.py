@@ -170,7 +170,7 @@ class DataGenerator:
             if load_images_into_memory:
                 self.images = []
                 if verbose:
-                    it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+                    it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout, bar_format='{l_bar}{bar}')
                 else:
                     it = self.filenames
                 for filename in it:
@@ -409,7 +409,7 @@ class DataGenerator:
         if self.load_images_into_memory:
             self.images = []
             if verbose:
-                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout, bar_format='{l_bar}{bar}')
             else:
                 it = self.filenames
             for filename in it:
@@ -488,7 +488,8 @@ class DataGenerator:
                 self.image_ids += image_ids
 
             if verbose:
-                it = tqdm(image_ids, desc="Processing image set '{}'".format(os.path.basename(image_set_filename)),
+                it = tqdm(image_ids, desc="Processing image set '{}'".format(os.path.basename(image_set_filename),
+                          bar_format='{l_bar}{bar}'),
                           file=sys.stdout)
             else:
                 it = image_ids
@@ -558,7 +559,7 @@ class DataGenerator:
         if self.load_images_into_memory:
             self.images = []
             if verbose:
-                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout, bar_format='{l_bar}{bar}')
             else:
                 it = self.filenames
             for filename in it:
@@ -611,7 +612,8 @@ class DataGenerator:
             if verbose:
                 it = tqdm(annotations['annotations'],
                           desc="Processing '{}/{}'".format(os.path.basename(os.path.dirname(annotations_filename)),
-                                                           os.path.basename(annotations_filename)))
+                                                           os.path.basename(annotations_filename)),
+                          bar_format='{l_bar}{bar}')
             else:
                 it = annotations['annotations']
 
@@ -648,7 +650,7 @@ class DataGenerator:
         if self.load_images_into_memory:
             self.images = []
             if verbose:
-                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout, bar_format='{l_bar}{bar}')
             else:
                 it = self.filenames
             for filename in it:
@@ -736,7 +738,7 @@ class DataGenerator:
 
             if verbose:
                 it = tqdm(annotations['images'], desc="Processing '{}'".format(os.path.basename(annotations_filename)),
-                          file=sys.stdout)
+                          file=sys.stdout, bar_format='{l_bar}{bar}')
             else:
                 it = annotations['images']
 
@@ -781,7 +783,7 @@ class DataGenerator:
         if self.load_images_into_memory:
             self.images = []
             if verbose:
-                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout)
+                it = tqdm(self.filenames, desc='Loading images into memory', file=sys.stdout, bar_format='{l_bar}{bar}')
             else:
                 it = self.filenames
             for filename in it:
@@ -1305,6 +1307,7 @@ class DataGenerator:
             # Compose the output.
             #########################################################################################
 
+            ### DEBUG ####
             ret = []
             if 'processed_images' in returns: ret.append(batch_X)
             if 'encoded_labels' in returns: ret.append(batch_y_encoded)
