@@ -99,6 +99,88 @@ class Resize:
                 return image, labels
 
 
+class Crop:
+    """
+    Crops images to a specified height and width in pixels, with a random
+    padding.
+    """
+
+    def __init__(self,
+                 height,
+                 width,
+                 box_filter=None,
+                 labels_format={'class_id': 0, 'xmin': 1, 'ymin': 2, 'xmax': 3, 'ymax': 4}):
+        """
+        Arguments:
+            height (int): The desired height of the output images in pixels.
+            width (int): The desired width of the output images in pixels.
+            box_filter (BoxFilter, optional): Only relevant if ground truth bounding boxes are given.
+                A `BoxFilter` object to filter out bounding boxes that don't meet the given criteria
+                after the transformation. Refer to the `BoxFilter` documentation for details. If `None`,
+                the validity of the bounding boxes is not checked.
+            labels_format (dict, optional): A dictionary that defines which index in the last axis of the labels
+                of an image contains which bounding box coordinate. The dictionary maps at least the keywords
+                'xmin', 'ymin', 'xmax', and 'ymax' to their respective indices within last axis of the labels array.
+        """
+        if not (isinstance(box_filter, BoxFilter) or box_filter is None):
+            raise ValueError("`box_filter` must be either `None` or a `BoxFilter` object.")
+        self.out_height = height
+        self.out_width = width
+        self.box_filter = box_filter
+        self.labels_format = labels_format
+
+    def __call__(self, image, labels=None, return_inverter=False):
+
+        img_height, img_width = image.shape[:2]
+
+        xmin = self.labels_format['xmin']
+        ymin = self.labels_format['ymin']
+        xmax = self.labels_format['xmax']
+        ymax = self.labels_format['ymax']
+
+        original_y, original_x, _ = image.shape
+        y_offset = original_y - self.out_height
+        x_offset = original_x - self.out_width
+
+        if y_offset > 0:
+            y_offset = int(y_offset/2)
+        if x_offset > 0:
+            x_offset = int(x_offset/2)
+
+
+        image = image[y_offset:y_offset+self.out_height,
+                      x_offset:x_offset+self.out_width]
+
+        if return_inverter:
+            def inverter(labels):
+                labels = np.copy(labels)
+                labels[:, [ymin + 1, ymax + 1]] = labels[:, [ymin + 1, ymax + 1]] - y_offset
+                labels[:, [xmin + 1, xmax + 1]] = labels[:, [xmin + 1, xmax + 1]] - x_offset
+                return labels
+
+        if labels is None:
+            if return_inverter:
+                return image, inverter
+            else:
+                return image
+        else:
+            labels = np.copy(labels)
+            labels[:, [ymin, ymax]] = labels[:, [ymin, ymax]] - y_offset
+            labels[:, [xmin, xmax]] = labels[:, [xmin, xmax]] - x_offset
+
+            if not (self.box_filter is None):
+                self.box_filter.labels_format = self.labels_format
+                labels = self.box_filter(labels=labels,
+                                         image_height=self.out_height,
+                                         image_width=self.out_width)
+
+            if return_inverter:
+                return image, labels, inverter
+            else:
+                return image, labels
+
+
+
 class ResizeRandomInterp:
     """
     Resizes images to a specified height and width in pixels using a radnomly

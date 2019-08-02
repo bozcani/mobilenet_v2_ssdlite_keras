@@ -4,8 +4,9 @@ import yaml
 import argparse
 import numpy as np
 
-from PIL import Image
-from imageio import imread
+from tqdm import tqdm
+from PIL import Image, ImageDraw, ImageFont
+from os import listdir, path
 from keras.optimizers import Adam
 from matplotlib import pyplot as plt
 from keras.preprocessing import image
@@ -19,72 +20,65 @@ class Inference:
         with open(args.training_config, 'r') as config_file:
             try:
                 self.training_config = yaml.safe_load(config_file)
-                for key, val in self.training_config.items():
-                    if key == 'aspect_ratios_per_layer':
-                        self.training_config[key] = [[eval(str(ar)) for ar in layer] for layer in val]
             except yaml.YAMLError as exc:
                 raise Exception(exc)
 
+        self.path = args.path
         self.model = self._load_model()
-        self.orig_images = []
-        self.input_images = self._load_images()
+        self.input_images = [image.img_to_array(
+            image.load_img(
+                path.join(self.path, f)).resize(
+                    (self.training_config['input_res'][1],
+                     self.training_config['input_res'][0])))
+            for f in sorted(listdir(self.path))
+            if path.isfile(path.join(self.path, f))]
 
     def _load_model(self):
         model = mobilenet_v2_ssd(self.training_config, mode='inference')
-        # 2: Load the trained weights into the model.
         model.load_weights(self.weights_path, by_name=True)
-        # 3: Compile the model so that Keras won't complain the next time you load it.
         adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
         ssd_loss = SSDLoss(neg_pos_ratio=3, alpha=1.0)
         model.compile(optimizer=adam, loss=ssd_loss.compute_loss)
 
         return model
 
-    def _load_images(self):
-        input_images = [] # Store resized versions of the images here.
-        # We'll only load one image in this example.
-        img_path = '/home/theomorales/Code/hybrid-dataset/validation/lights_real_flight/images/000207.png'
-        # img_path = '/home/theomorales/Code/hybrid-dataset/training/lights_real_flight/images/007043.png'
-        # img_path = '/home/theomorales/Code/hybrid-dataset/validation/lights_real_flight/images/000354.png'
-        self.orig_images.append(imread(img_path))
-        img = image.load_img(img_path,
-                             target_size=(self.training_config['input_res'][0],
-                                          self.training_config['input_res'][1]))
-        img_array = image.img_to_array(img)
-        input_images.append(img_array)
-
-        return np.array(input_images)
-
-
     def infer(self):
-        y_pred = self.model.predict(self.input_images)
-        confidence_threshold = 0.5
-        y_pred_thresh = [y_pred[k][y_pred[k,:,1] > confidence_threshold] for k in range(y_pred.shape[0])]
-        np.set_printoptions(precision=2, suppress=True, linewidth=90)
-
-        print("Predicted boxes:\n")
-        print('   class   conf xmin   ymin   xmax   ymax')
-        print(y_pred_thresh[0])
-
-        colors = plt.cm.hsv(np.linspace(0, 1, 81)).tolist()
+        n = 0
+        step = 100
+        colors = ['black', 'red', 'blue', 'green']
         classes = ['Background', 'Target gate', 'Backward gate', 'Forward gate']
+        # create the ImageFont instance
+        font_file_path = 'Hack-Regular.ttf'
+        font = ImageFont.truetype(font_file_path, size=10, encoding="unic")
 
-        plt.figure(figsize=(20, 12))
-        plt.imshow(self.orig_images[0])
+        with tqdm(total=len(self.input_images)) as pbar:
+            for i in range(0, len(self.input_images), step):
+                input_images = self.input_images[i:i+step]
+                y_pred = self.model.predict(np.array(input_images))
+                confidence_threshold = 0.5
+                y_pred_thresh = [y_pred[k][y_pred[k,:,1] > confidence_threshold] for k in range(y_pred.shape[0])]
 
-        current_axis = plt.gca()
+                for img, predictions in zip(input_images, y_pred_thresh):
+                    pilImg = image.array_to_img(img)
+                    draw = ImageDraw.Draw(pilImg)
+                    for box in predictions:
+                        xmin, ymin, xmax, ymax = box[2], box[3], box[4], box[5]
+                        if int(box[0]) is not 0:
+                            color = colors[int(box[0])]
+                            label = '{}: {:.2f}'.format(classes[int(box[0])], box[1])
+                            draw.rectangle(((xmin, ymin), (xmax, ymax)), outline=color, width=2)
+                            textSize = draw.textsize(label)
+                            draw.rectangle((
+                                (xmin-2, ymin-2),
+                                (xmin+textSize[0]+2, ymin+textSize[1])),
+                                fill=color)
+                            draw.text((xmin, ymin), label, fill='white',
+                                      font=font)
 
-        for box in y_pred_thresh[0]:
-            # Transform the predicted bounding boxes for the 300x300 image to the original image dimensions.
-            xmin = box[2] * self.orig_images[0].shape[1] / self.training_config['input_res'][0]
-            ymin = box[3] * self.orig_images[0].shape[0] / self.training_config['input_res'][1]
-            xmax = box[4] * self.orig_images[0].shape[1] / self.training_config['input_res'][1]
-            ymax = box[5] * self.orig_images[0].shape[0] / self.training_config['input_res'][0]
-            color = colors[int(box[0])]
-            label = '{}: {:.2f}'.format(classes[int(box[0])], box[1])
-            current_axis.add_patch(plt.Rectangle((xmin, ymin), xmax-xmin, ymax-ymin, color=color, fill=False, linewidth=2))
-            current_axis.text(xmin, ymin, label, size='x-large', color='white', bbox={'facecolor':color, 'alpha':1.0})
-        plt.show()
+                    pilImg.save("inference/%06d.png" % n)
+                    pilImg.close()
+                    n += 1
+                    pbar.update(1)
 
 
 if __name__ == "__main__":
@@ -95,6 +89,7 @@ if __name__ == "__main__":
                         YAML configuration file for the training session''')
     parser.add_argument('--weights-path', type=str, help='''the path to the
                         weights file for transfer learning''', required=False)
+    parser.add_argument('--path', type=str, required=True)
     args = parser.parse_args()
     inference = Inference(args)
     inference.infer()

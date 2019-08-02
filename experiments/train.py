@@ -12,13 +12,13 @@ from keras import backend as K
 from keras.optimizers import Adam
 from losses.keras_ssd_loss import SSDLoss
 from utils.ssd_input_encoder import SSDInputEncoder
-from utils.object_detection_2d_geometric_ops import Resize
+from utils.object_detection_2d_geometric_ops import Resize, Crop
 from models.keras_mobilenet_v2_ssdlite import mobilenet_v2_ssd
 from utils.hybrid_dataset import get_hybrid_dataset_classes_map
 from utils.object_detection_2d_data_generator import DataGenerator
 from utils.object_detection_2d_photometric_ops import ConvertTo3Channels
 from utils.data_augmentation_chain_original_ssd import SSDDataAugmentation
-from keras.callbacks import TensorBoard, ModelCheckpoint, LearningRateScheduler
+from keras.callbacks import TensorBoard, ModelCheckpoint, LearningRateScheduler, ReduceLROnPlateau, EarlyStopping
 
 
 class Trainer:
@@ -38,17 +38,17 @@ class Trainer:
         with open(args.training_config, 'r') as config_file:
             try:
                 self.training_config = yaml.safe_load(config_file)
-                for key, val in self.training_config.items():
-                    if key == 'aspect_ratios_per_layer':
-                        self.training_config[key] = [[eval(str(ar)) for ar in layer] for layer in val]
+#                 for key, val in self.training_config.items():
+                    # if key == 'aspect_ratios_per_layer':
+#                         self.training_config[key] = [[eval(str(ar)) for ar in layer] for layer in val]
             except yaml.YAMLError as exc:
                 raise Exception(exc)
 
     # learning rate schedule
     def lr_schedule(self, epoch):
-        if epoch < 200:
+        if epoch < 30:
             return 0.001
-        elif epoch < 500:
+        elif epoch < 100:
             return 0.0001
         else:
             return 0.00001
@@ -99,6 +99,7 @@ class Trainer:
                     print(e)
         return model
 
+
     def train(self):
         # build model
         model = mobilenet_v2_ssd(self.training_config)
@@ -128,11 +129,12 @@ class Trainer:
         # set the image transformations for pre-processing and data augmentation options.
         # For the training generator:
         ssd_data_augmentation = SSDDataAugmentation(img_height=self.training_config['input_res'][0],
-                                                    img_width=self.training_config['input_res'][1])
+                                                    img_width=self.training_config['input_res'][1],
+                                                    background=self.training_config['subtract_mean'])
 
         # For the validation generator:
         convert_to_3_channels = ConvertTo3Channels()
-        resize = Resize(height=self.training_config['input_res'][0],
+        crop = Crop(height=self.training_config['input_res'][0],
                         width=self.training_config['input_res'][1])
 
         # instantiate an encoder that can encode ground truth labels into the format needed by the SSD loss function.
@@ -148,6 +150,8 @@ class Trainer:
                                             img_width=self.training_config['input_res'][1],
                                             n_classes=self.training_config['n_classes'],
                                             predictor_sizes=predictor_sizes,
+                                            min_scale=self.training_config['min_scale'],
+                                            max_scale=self.training_config['max_scale'],
                                             scales=self.training_config['scales'],
                                             aspect_ratios_per_layer=self.training_config['aspect_ratios_per_layer'],
                                             two_boxes_for_ar1=self.training_config['two_boxes_for_ar1'],
@@ -156,8 +160,8 @@ class Trainer:
                                             clip_boxes=self.training_config['clip_boxes'],
                                             variances=self.training_config['variances'],
                                             matching_type='multi',
-                                            pos_iou_threshold=0.5,
-                                            neg_iou_limit=0.3,
+                                            pos_iou_threshold=self.training_config['pos_iou_threshold'],
+                                            neg_iou_limit=0.5,
                                             coords=self.training_config['coords'],
                                             normalize_coords=self.training_config['normalize_coords'],
                                             background_id=self.training_config['background_class_id'])
@@ -166,7 +170,8 @@ class Trainer:
 
         train_generator = train_dataset.generate(batch_size=self.training_config['batch_size'],
                                                  shuffle=True,
-                                                 transformations=[ssd_data_augmentation],
+                                                 transformations=[convert_to_3_channels,
+                                                                  ssd_data_augmentation],
                                                  label_encoder=ssd_input_encoder,
                                                  returns={'processed_images',
                                                           'encoded_labels'},
@@ -174,13 +179,11 @@ class Trainer:
 
         val_generator = val_dataset.generate(batch_size=self.training_config['batch_size'],
                                              shuffle=False,
-                                             transformations=[convert_to_3_channels,
-                                                              resize],
+                                             transformations=[convert_to_3_channels],
                                              label_encoder=ssd_input_encoder,
                                              returns={'processed_images',
                                                       'encoded_labels'},
                                              keep_images_without_gt=False)
-
 
         # Get the number of samples in the training and validations datasets.
         train_dataset_size = train_dataset.get_dataset_size()
@@ -192,11 +195,26 @@ class Trainer:
         steps_per_epoch = int(np.ceil(train_dataset_size/self.training_config['batch_size']))
         validation_steps = int(np.ceil(val_dataset_size/self.training_config['batch_size']))
 
-        callbacks = [LearningRateScheduler(schedule=self.lr_schedule, verbose=1),
-                     TensorBoard(log_dir=self.log_dir, histogram_freq=0, write_graph=True, write_images=False),
+        early_stopping = EarlyStopping(monitor='val_loss',
+                                       min_delta=0.0,
+                                       patience=10,
+                                       verbose=1)
+
+        reduce_learning_rate = ReduceLROnPlateau(monitor='loss',
+                                                 factor=0.2,
+                                                 patience=6,
+                                                 verbose=1,
+                                                 epsilon=0.001,
+                                                 cooldown=0,
+                                                 min_lr=0.0000001)
+
+
+        callbacks = [reduce_learning_rate,
+                     TensorBoard(log_dir=self.log_dir, histogram_freq=0,
+                                 write_graph=True, write_images=True),
                      ModelCheckpoint(
                          os.path.join(self.log_dir,
-                                      "ssdseg_hybrid_dataset_{epoch:02d}_loss-{loss:.4f}_val_loss-{val_loss:.4f}.h5"),
+                                      "epoch-{epoch:02d}_loss-{loss:.4f}_val_loss-{val_loss:.4f}.h5"),
                          monitor='val_loss', verbose=1, save_best_only=True, save_weights_only=True)]
 
         model.fit_generator(train_generator,
