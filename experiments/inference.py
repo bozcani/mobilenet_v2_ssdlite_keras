@@ -34,7 +34,11 @@ class Inference:
             if path.isfile(path.join(self.path, f))]
 
     def _load_model(self):
-        model = mobilenet_v2_ssd(self.training_config, mode='inference')
+        model = mobilenet_v2_ssd(self.training_config, mode='inference_fast')
+        with open('model.yaml', 'w') as f:
+            yamodel = model.to_yaml()
+            f.write(yamodel)
+            print("Model saved!")
         model.load_weights(self.weights_path, by_name=True)
         adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
         ssd_loss = SSDLoss(neg_pos_ratio=3, alpha=1.0)

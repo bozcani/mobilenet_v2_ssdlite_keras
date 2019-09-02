@@ -6,6 +6,7 @@ import yaml
 import h5py
 import argparse
 import numpy as np
+import imgaug.augmenters as iaa
 
 from tqdm import tqdm
 from keras import backend as K
@@ -35,6 +36,8 @@ class Trainer:
             self.val_annotations = args.val_annotations
         self.log_dir = args.log_dir
         self.weights_path = args.weights_path
+        self.restore = args.restore
+        self.epoch = args.epoch
         with open(args.training_config, 'r') as config_file:
             try:
                 self.training_config = yaml.safe_load(config_file)
@@ -104,11 +107,18 @@ class Trainer:
         # build model
         model = mobilenet_v2_ssd(self.training_config)
         print(model.summary())
+        print("[*] Exporting model to {}/model.json".format(self.log_dir))
+        with open(os.path.join(self.log_dir, 'model.json'), 'w') as f:
+            f.write(model.to_json())
 
         # load weights
         if self.weights_path:
-            model = self.transfer_weights(model)
-            # model.load_weights(self.weights_path, by_name=True)
+            if self.restore:
+                model.load_weights(self.weights_path, by_name=True)
+                initial_epoch = self.epoch
+            else:
+                initial_epoch = 0
+                model = self.transfer_weights(model)
 
         # compile the model
         adam = Adam(lr=0.001, beta_1=0.9, beta_2=0.999, epsilon=1e-08, decay=0.0)
@@ -136,6 +146,10 @@ class Trainer:
         convert_to_3_channels = ConvertTo3Channels()
         crop = Crop(height=self.training_config['input_res'][0],
                         width=self.training_config['input_res'][1])
+        resize = Resize(height=self.training_config['input_res'][0],
+                        width=self.training_config['input_res'][1])
+        # ImgAug pipeline
+        seq = iaa.Sometimes(0.5, iaa.MotionBlur(k=(3, 11), angle=(0, 360)))
 
         # instantiate an encoder that can encode ground truth labels into the format needed by the SSD loss function.
         # The encoder constructor needs the spatial dimensions of the model's predictor layers to create the anchor boxes.
@@ -171,7 +185,9 @@ class Trainer:
         train_generator = train_dataset.generate(batch_size=self.training_config['batch_size'],
                                                  shuffle=True,
                                                  transformations=[convert_to_3_channels,
+                                                                  resize,
                                                                   ssd_data_augmentation],
+                                                 # imgAugSequence=seq,
                                                  label_encoder=ssd_input_encoder,
                                                  returns={'processed_images',
                                                           'encoded_labels'},
@@ -179,7 +195,8 @@ class Trainer:
 
         val_generator = val_dataset.generate(batch_size=self.training_config['batch_size'],
                                              shuffle=False,
-                                             transformations=[convert_to_3_channels],
+                                             transformations=[convert_to_3_channels,
+                                                             resize],
                                              label_encoder=ssd_input_encoder,
                                              returns={'processed_images',
                                                       'encoded_labels'},
@@ -221,7 +238,8 @@ class Trainer:
                             epochs=self.training_config['epochs'],
                             steps_per_epoch=steps_per_epoch,
                             callbacks=callbacks, validation_data=val_generator,
-                            validation_steps=validation_steps, initial_epoch=0)
+                            validation_steps=validation_steps,
+                            initial_epoch=initial_epoch)
 
 
 
@@ -252,6 +270,11 @@ if __name__ == "__main__":
                         YAML configuration file for the training session''')
     parser.add_argument('--weights-path', type=str, help='''the path to the
                         weights file for transfer learning''', required=False)
+    parser.add_argument('--restore', action='store_true', help='''whether to
+                        restore the network to a previous epoch''',
+                        required=False)
+    parser.add_argument('--epoch', type=int, default=None, help='''Initial
+                        epoch to restore the model at''')
     args = parser.parse_args()
     trainer = Trainer(args)
     trainer.train()

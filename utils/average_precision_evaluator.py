@@ -45,6 +45,7 @@ class Evaluator:
                  n_classes,
                  data_generator,
                  model_mode='inference',
+                 label_encoder=None,
                  pred_format={'class_id': 0, 'conf': 1, 'xmin': 2, 'ymin': 3, 'xmax': 4, 'ymax': 5},
                  gt_format={'class_id': 0, 'xmin': 1, 'ymin': 2, 'xmax': 3, 'ymax': 4}):
         """
@@ -73,6 +74,7 @@ class Evaluator:
         self.model_mode = model_mode
         self.pred_format = pred_format
         self.gt_format = gt_format
+        self.label_encoder = label_encoder
 
         # The following lists all contain per-class data, i.e. all list have the length `n_classes + 1`,
         # where one element is for the background class, i.e. that element is just a dummy entry.
@@ -215,7 +217,7 @@ class Evaluator:
         #############################################################################################
 
         self.get_num_gt_per_class(ignore_neutral_boxes=ignore_neutral_boxes,
-                                  verbose=False,
+                                  verbose=verbose,
                                   ret=False)
 
         #############################################################################################
@@ -346,13 +348,13 @@ class Evaluator:
         generator = self.data_generator.generate(batch_size=batch_size,
                                                  shuffle=False,
                                                  transformations=transformations,
-                                                 label_encoder=None,
+                                                 label_encoder=self.label_encoder,
                                                  returns={'processed_images',
                                                           'image_ids',
                                                           'evaluation-neutral',
                                                           'inverse_transform',
                                                           'original_labels'},
-                                                 keep_images_without_gt=True,
+                                                 keep_images_without_gt=False,
                                                  degenerate_box_handling='remove')
 
         # If we don't have any real image IDs, generate pseudo-image IDs.
@@ -665,7 +667,7 @@ class Evaluator:
 
             # Iterate over all predictions.
             for i in tr:
-
+                # TODO BUGFIX: the GT isn't properly accessed
                 prediction = predictions_sorted[i]
                 image_id = prediction['image_id']
                 # Convert the structured array element to a regular array.
@@ -686,6 +688,7 @@ class Evaluator:
                 gt = gt[class_mask]
                 if ignore_neutral_boxes and eval_neutral_available:
                     eval_neutral = eval_neutral[class_mask]
+
 
                 if gt.size == 0:
                     # If the image doesn't contain any objects of this class,

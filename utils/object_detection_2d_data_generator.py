@@ -22,6 +22,7 @@ import inspect
 import warnings
 import numpy as np
 import sklearn.utils
+import imgaug.augmenters as iaa
 
 from PIL import Image
 from copy import deepcopy
@@ -589,10 +590,20 @@ class DataGenerator:
         self.images_dir = []
         self.annotations_filenames = []
 
-        for root, subdirs, files in os.walk(datasets_dir):
-            if 'images' in subdirs and 'annotations.json' in files:
-                self.images_dir.append(os.path.join(datasets_dir, root, 'images'))
-                self.annotations_filenames.append(os.path.join(datasets_dir, root, 'annotations.json'))
+        if os.path.isfile(os.path.join(datasets_dir, 'annotations.json')):
+            self.images_dir.append(os.path.join(datasets_dir, 'images'))
+            self.annotations_filenames.append(os.path.join(datasets_dir,
+                                                           'annotations.json'))
+        else:
+            for root, subdirs, files in os.walk(datasets_dir):
+                if 'images' in subdirs and 'annotations.json' in files:
+                    self.images_dir.append(os.path.join(datasets_dir, root, 'images'))
+                    self.annotations_filenames.append(os.path.join(datasets_dir,
+                                                                   root,
+                                                                   'annotations.json'))
+
+
+        assert len(self.annotations_filenames) > 0, "No annotations found!"
 
         self.include_classes = include_classes
         self.filenames = []
@@ -606,6 +617,7 @@ class DataGenerator:
 
         self.classes_to_labels = annotations['classes']
 
+        i = 0
         for images_dir, annotations_filename in zip(self.images_dir, self.annotations_filenames):
             with open(annotations_filename) as f:
                 annotations = json.load(f)
@@ -617,12 +629,12 @@ class DataGenerator:
             else:
                 it = annotations['annotations']
 
-            i = 0
             for img_annotations in it:
                 img = img_annotations['image']
                 annotations = img_annotations['annotations']
                 self.filenames.append(os.path.join(images_dir, img))
                 self.image_ids.append(i)
+                i += 1
 
                 if ground_truth_available:
                     boxes = []
@@ -950,6 +962,7 @@ class DataGenerator:
                  batch_size=32,
                  shuffle=True,
                  transformations=[],
+                 imgAugSequence=None,
                  label_encoder=None,
                  returns={'processed_images', 'encoded_labels'},
                  keep_images_without_gt=False,
@@ -1201,7 +1214,7 @@ class DataGenerator:
 
                     for transform in transformations:
 
-                        if not (self.labels is None):
+                        if (not (self.labels is None)) and (batch_y[i].size != 0):
 
                             if ('inverse_transform' in returns) and (
                                     'return_inverter' in inspect.signature(transform).parameters):
@@ -1229,11 +1242,15 @@ class DataGenerator:
 
                     batch_inverse_transforms.append(inverse_transforms[::-1])
 
+                # Apply the imgaug pipeline if any
+                if imgAugSequence:
+                    batch_X = imgAugSequence.augment_images(batch_X)
+
                 #########################################################################################
                 # Check for degenerate boxes in this batch item.
                 #########################################################################################
 
-                if not (self.labels is None):
+                if (not (self.labels is None)) and (batch_y[i].size != 0):
 
                     xmin = self.labels_format['xmin']
                     ymin = self.labels_format['ymin']
