@@ -77,7 +77,7 @@ def convert_coordinates(tensor, start_index, conversion, border_pixels='half'):
         tensor1[..., ind + 2] = tensor[..., ind + 1]
     else:
         raise ValueError(
-            "Unexpected conversion value. Supported values are 'minmax2centroids', 、"
+            "Unexpected conversion value. Supported values are 'minmax2centroids', "
             "'centroids2minmax', 'corners2centroids', 'centroids2corners', 'minmax2corners', and 'corners2minmax'.")
 
     return tensor1

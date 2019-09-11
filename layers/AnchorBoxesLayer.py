@@ -161,7 +161,7 @@ class AnchorBoxes(Layer):
         wh_list = np.array(wh_list)
 
         # We need the shape of the input tensor
-        if K.image_dim_ordering() == 'tf':
+        if K.common.image_dim_ordering() == 'tf':
             batch_size, feature_map_height, feature_map_width, feature_map_channels = x._keras_shape
         # Not yet relevant since TensorFlow is the only supported backend right now,
         # but it can't harm to have this in here for the future
@@ -259,7 +259,7 @@ class AnchorBoxes(Layer):
         return boxes_tensor
 
     def compute_output_shape(self, input_shape):
-        if K.image_dim_ordering() == 'tf':
+        if K.common.image_dim_ordering() == 'tf':
             batch_size, feature_map_height, feature_map_width, feature_map_channels = input_shape
         # Not yet relevant since TensorFlow is the only supported backend right now,
         # but it can't harm to have this in here for the future

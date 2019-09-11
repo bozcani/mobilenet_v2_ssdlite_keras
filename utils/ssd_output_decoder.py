@@ -468,8 +468,8 @@ def decode_detections_debug(y_pred,
     """
     if normalize_coords and ((img_height is None) or (img_width is None)):
         raise ValueError(
-            "If relative box coordinates are supposed to be converted to absolute coordinates, 、"
-            "the decoder needs the image size in order to decode the predictions, 、"
+            "If relative box coordinates are supposed to be converted to absolute coordinates, "
+            "the decoder needs the image size in order to decode the predictions, "
             "but `img_height == {}` and `img_width == {}`".format(
                 img_height, img_width))
 
